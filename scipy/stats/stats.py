@@ -5402,7 +5402,7 @@ def multiscale_graphcorr(x, y, compute_distance=_euclidean_dist, reps=1000,
         y = compute_distance(y)
 
     # calculate MGC stat
-    stat, stat_dict = _mgc_stat(x, y)
+    stat, stat_dict = _mgc_stat(x, y) 
     stat_mgc_map = stat_dict["stat_mgc_map"]
     opt_scale = stat_dict["opt_scale"]
 
@@ -5417,6 +5417,440 @@ def multiscale_graphcorr(x, y, compute_distance=_euclidean_dist, reps=1000,
 
     return MGCResult(stat, pvalue, mgc_dict)
 
+def distance_correlation(x, y, compute_distance=_euclidean_dist, reps=1000,
+                         workers=1, is_twosamp=False, random_state=None):
+    r"""
+    Todo
+
+    Parameters
+    ----------
+    x, y : ndarray
+        If ``x`` and ``y`` have shapes ``(n, p)`` and ``(n, q)`` where `n` is
+        the number of samples and `p` and `q` are the number of dimensions,
+        then the MGC independence test will be run.  Alternatively, ``x`` and
+        ``y`` can have shapes ``(n, n)`` if they are distance or similarity
+        matrices, and ``compute_distance`` must be sent to ``None``. If ``x``
+        and ``y`` have shapes ``(n, p)`` and ``(m, p)``, an unpaired
+        two-sample MGC test will be run.
+    compute_distance : callable, optional
+        A function that computes the distance or similarity among the samples
+        within each data matrix. Set to ``None`` if ``x`` and ``y`` are
+        already distance matrices. The default uses the euclidean norm metric.
+        If you are calling a custom function, either create the distance
+        matrix before-hand or create a function of the form
+        ``compute_distance(x)`` where `x` is the data matrix for which
+        pairwise distances are calculated.
+    reps : int, optional
+        The number of replications used to estimate the null when using the
+        permutation test. The default is ``1000``.
+    workers : int or map-like callable, optional
+        If ``workers`` is an int the population is subdivided into ``workers``
+        sections and evaluated in parallel (uses ``multiprocessing.Pool
+        <multiprocessing>``). Supply ``-1`` to use all cores available to the
+        Process. Alternatively supply a map-like callable, such as
+        ``multiprocessing.Pool.map`` for evaluating the p-value in parallel.
+        This evaluation is carried out as ``workers(func, iterable)``.
+        Requires that `func` be pickleable. The default is ``1``.
+    is_twosamp : bool, optional
+        If `True`, a two sample test will be run. If ``x`` and ``y`` have
+        shapes ``(n, p)`` and ``(m, p)``, this optional will be overriden and
+        set to ``True``. Set to ``True`` if ``x`` and ``y`` both have shapes
+        ``(n, p)`` and a two sample test is desired. The default is ``False``.
+        Note that this will not run if inputs are distance matrices.
+    random_state : int or np.random.RandomState instance, optional
+        If already a RandomState instance, use it.
+        If seed is an int, return a new RandomState instance seeded with seed.
+        If None, use np.random.RandomState. Default is None.
+
+    Returns
+    -------
+    stat : float
+        The sample distance correlation test statistic within `[-1, 1]`.
+    pvalue : float
+        The p-value obtained via permutation.
+    mgc_dict : dict
+        Contains additional useful additional returns containing the following
+        keys:
+
+            - mgc_map : ndarray
+                A 2D representation of the latent geometry of the relationship.
+                of the relationship.
+            - opt_scale : (int, int)
+                The estimated optimal scale as a `(x, y)` pair.
+            - null_dist : list
+                The null distribution derived from the permuted matrices
+
+    See Also
+    --------
+    pearsonr : Pearson correlation coefficient and p-value for testing
+               non-correlation.
+    kendalltau : Calculates Kendall's tau.
+    spearmanr : Calculates a Spearman rank-order correlation coefficient.
+
+    Notes
+    -----
+    A description of the process of MGC and applications on neuroscience data
+    can be found in [1]_. It is performed using the following steps:
+
+    #. Two distance matrices :math:`D^X` and :math:`D^Y` are computed and
+       modified to be mean zero columnwise. This results in two
+       :math:`n \times n` distance matrices :math:`A` and :math:`B` (the
+       centering and unbiased modification) [3]_.
+
+    #. For all values :math:`k` and :math:`l` from :math:`1, ..., n`,
+
+       * The :math:`k`-nearest neighbor and :math:`l`-nearest neighbor graphs
+         are calculated for each property. Here, :math:`G_k (i, j)` indicates
+         the :math:`k`-smallest values of the :math:`i`-th row of :math:`A`
+         and :math:`H_l (i, j)` indicates the :math:`l` smallested values of
+         the :math:`i`-th row of :math:`B`
+
+       * Let :math:`\circ` denotes the entry-wise matrix product, then local
+         correlations are summed and normalized using the following statistic:
+
+    .. math::
+
+        c^{kl} = \frac{\sum_{ij} A G_k B H_l}
+                      {\sqrt{\sum_{ij} A^2 G_k \times \sum_{ij} B^2 H_l}}
+
+    #. The MGC test statistic is the smoothed optimal local correlation of
+       :math:`\{ c^{kl} \}`. Denote the smoothing operation as :math:`R(\cdot)`
+       (which essentially set all isolated large correlations) as 0 and
+       connected large correlations the same as before, see [3]_.) MGC is,
+
+    .. math::
+
+        MGC_n (x, y) = \max_{(k, l)} R \left(c^{kl} \left( x_n, y_n \right)
+                                                    \right)
+
+    The test statistic returns a value between :math:`(-1, 1)` since it is
+    normalized.
+
+    The p-value returned is calculated using a permutation test. This process
+    is completed by first randomly permuting :math:`y` to estimate the null
+    distribution and then calculating the probability of observing a test
+    statistic, under the null, at least as extreme as the observed test
+    statistic.
+
+    MGC requires at least 5 samples to run with reliable results. It can also
+    handle high-dimensional data sets.
+    In addition, by manipulating the input data matrices, the two-sample
+    testing problem can be reduced to the independence testing problem [4]_.
+    Given sample data :math:`U` and :math:`V` of sizes :math:`p \times n`
+    :math:`p \times m`, data matrix :math:`X` and :math:`Y` can be created as
+    follows:
+
+    .. math::
+
+        X = [U | V] \in \mathcal{R}^{p \times (n + m)}
+        Y = [0_{1 \times n} | 1_{1 \times m}] \in \mathcal{R}^{(n + m)}
+
+    Then, the MGC statistic can be calculated as normal. This methodology can
+    be extended to similar tests such as distance correlation [4]_.
+
+    .. versionadded:: 1.4.0
+
+    References
+    ----------
+    .. [1] Vogelstein, J. T., Bridgeford, E. W., Wang, Q., Priebe, C. E.,
+           Maggioni, M., & Shen, C. (2019). Discovering and deciphering
+           relationships across disparate data modalities. ELife.
+    .. [2] Panda, S., Palaniappan, S., Xiong, J., Swaminathan, A.,
+           Ramachandran, S., Bridgeford, E. W., ... Vogelstein, J. T. (2019).
+           mgcpy: A Comprehensive High Dimensional Independence Testing Python
+           Package. :arXiv:`1907.02088`
+    .. [3] Shen, C., Priebe, C.E., & Vogelstein, J. T. (2019). From distance
+           correlation to multiscale graph correlation. Journal of the American
+           Statistical Association.
+    .. [4] Shen, C. & Vogelstein, J. T. (2018). The Exact Equivalence of
+           Distance and Kernel Methods for Hypothesis Testing.
+           :arXiv:`1806.05514`
+
+    Examples
+    --------
+    >>> from scipy.stats import multiscale_graphcorr
+    >>> x = np.arange(100)
+    >>> y = x
+    >>> stat, pvalue, _ = multiscale_graphcorr(x, y, workers=-1)
+    >>> '%.1f, %.3f' % (stat, pvalue)
+    '1.0, 0.001'
+
+    Alternatively,
+
+    >>> x = np.arange(100)
+    >>> y = x
+    >>> mgc = multiscale_graphcorr(x, y)
+    >>> '%.1f, %.3f' % (mgc.stat, mgc.pvalue)
+    '1.0, 0.001'
+
+    To run an unpaired two-sample test,
+
+    >>> x = np.arange(100)
+    >>> y = np.arange(79)
+    >>> mgc = multiscale_graphcorr(x, y, random_state=1)
+    >>> '%.3f, %.2f' % (mgc.stat, mgc.pvalue)
+    '0.033, 0.02'
+
+    or, if shape of the inputs are the same,
+
+    >>> x = np.arange(100)
+    >>> y = x
+    >>> mgc = multiscale_graphcorr(x, y, is_twosamp=True)
+    >>> '%.3f, %.1f' % (mgc.stat, mgc.pvalue)
+    '-0.008, 1.0'
+    """
+    if not isinstance(x, np.ndarray) or not isinstance(y, np.ndarray):
+        raise ValueError("x and y must be ndarrays")
+
+    # convert arrays of type (n,) to (n, 1)
+    if x.ndim == 1:
+        x = x[:, np.newaxis]
+    elif x.ndim != 2:
+        raise ValueError("Expected a 2-D array `x`, found shape "
+                         "{}".format(x.shape))
+    if y.ndim == 1:
+        y = y[:, np.newaxis]
+    elif y.ndim != 2:
+        raise ValueError("Expected a 2-D array `y`, found shape "
+                         "{}".format(y.shape))
+
+    nx, px = x.shape
+    ny, py = y.shape
+
+    # check for NaNs
+    _contains_nan(x, nan_policy='raise')
+    _contains_nan(y, nan_policy='raise')
+
+    # check for positive or negative infinity and raise error
+    if np.sum(np.isinf(x)) > 0 or np.sum(np.isinf(y)) > 0:
+        raise ValueError("Inputs contain infinities")
+
+    if nx != ny:
+        if px == py:
+            # reshape x and y for two sample testing
+            is_twosamp = True
+        else:
+            raise ValueError("Shape mismatch, x and y must have shape [n, p] "
+                             "and [n, q] or have shape [n, p] and [m, p].")
+
+    if nx < 5 or ny < 5:
+        raise ValueError("MGC requires at least 5 samples to give reasonable "
+                         "results.")
+
+    # convert x and y to float
+    x = x.astype(np.float64)
+    y = y.astype(np.float64)
+
+    # check if compute_distance_matrix if a callable()
+    if not callable(compute_distance) and compute_distance is not None:
+        raise ValueError("Compute_distance must be a function.")
+
+    # check if number of reps exists, integer, or > 0 (if under 1000 raises
+    # warning)
+    if not isinstance(reps, int) or reps < 0:
+        raise ValueError("Number of reps must be an integer greater than 0.")
+    elif reps < 1000:
+        msg = ("The number of replications is low (under 1000), and p-value "
+               "calculations may be unreliable. Use the p-value result, with "
+               "caution!")
+        warnings.warn(msg, RuntimeWarning)
+
+    if is_twosamp:
+        if compute_distance is None:
+            raise ValueError("Cannot run if inputs are distance matrices")
+        x, y = _two_sample_transform(x, y)
+
+    if compute_distance is not None:
+        # compute distance matrices for x and y
+        x = compute_distance(x)
+        y = compute_distance(y)
+
+    # calculate MGC stat
+    stat, stat_dict = _dcorr(x, y) #BS HERE
+    stat_mgc_map = stat_dict["stat_mgc_map"]
+    opt_scale = stat_dict["opt_scale"]
+
+    # calculate permutation MGC p-value
+    pvalue, null_dist = _perm_test(x, y, stat, reps=reps, workers=workers,
+                                   random_state=random_state)
+
+    # save all stats (other than stat/p-value) in dictionary
+    mgc_dict = {"mgc_map": stat_mgc_map,
+                "opt_scale": opt_scale,
+                "null_dist": null_dist}
+
+    return MGCResult(stat, pvalue, mgc_dict)
+
+@jit(nopython=True, cache=True)
+def _dcorr(distx, disty, bias=False, is_fast=False):  # pragma: no cover
+    """
+    Calculate the Dcorr test statistic.
+    """
+    if is_fast:
+        # calculate covariances and variances
+        covar = _fast_1d_dcov(distx, disty, bias=bias)
+        varx = _fast_1d_dcov(distx, distx, bias=bias)
+        vary = _fast_1d_dcov(disty, disty, bias=bias)
+    else:
+        # center distance matrices
+        distx = _center_distmat(distx, bias)
+        disty = _center_distmat(disty, bias)
+
+        # calculate covariances and variances
+        covar = _dcov(distx, disty, bias=bias, only_dcov=False)
+        varx = _dcov(distx, distx, bias=bias, only_dcov=False)
+        vary = _dcov(disty, disty, bias=bias, only_dcov=False)
+
+    # stat is 0 with negative variances (would make denominator undefined)
+    if varx <= 0 or vary <= 0:
+        stat = 0
+
+    # calculate generalized test statistic
+    else:
+        stat = covar / np.real(np.sqrt(varx * vary))
+
+    return stat
+
+
+
+@jit(nopython=True, cache=True)
+def _fast_1d_dcov(x, y, bias=False):  # pragma: no cover
+    """
+    Calculate the Dcorr test statistic. Note that though Dcov is calculated
+    and stored in covar, but not called due to a slower implementation.
+    """
+    n = x.shape[0]
+
+    # sort inputs
+    x_orig = x.ravel()
+    x = np.sort(x_orig)
+    y = y[np.argsort(x_orig)]
+    x = x.reshape(-1, 1)  # for numba
+
+    # cumulative sum
+    si = _cpu_cumsum(x)
+    ax = (np.arange(-(n - 2), n + 1, 2) * x.ravel()).reshape(-1, 1) + (si[-1] - 2 * si)
+
+    v = np.hstack((x, y, x * y))
+    nw = v.shape[1]
+
+    idx = np.vstack((np.arange(n), np.zeros(n))).astype(np.int64).T
+    iv1 = np.zeros((n, 1))
+    iv2 = np.zeros((n, 1))
+    iv3 = np.zeros((n, 1))
+    iv4 = np.zeros((n, 1))
+
+    i = 1
+    r = 0
+    s = 1
+    while i < n:
+        gap = 2 * i
+        k = 0
+        idx_r = idx[:, r]
+        csumv = np.vstack((np.zeros((1, nw)), _cpu_cumsum(v[idx_r, :])))
+
+        for j in range(1, n + 1, gap):
+            st1 = j - 1
+            e1 = min(st1 + i - 1, n - 1)
+            st2 = j + i - 1
+            e2 = min(st2 + i - 1, n - 1)
+
+            while (st1 <= e1) and (st2 <= e2):
+                idx1 = idx_r[st1]
+                idx2 = idx_r[st2]
+
+                if y[idx1] >= y[idx2]:
+                    idx[k, s] = idx1
+                    st1 += 1
+                else:
+                    idx[k, s] = idx2
+                    st2 += 1
+                    iv1[idx2] += e1 - st1 + 1
+                    iv2[idx2] += csumv[e1 + 1, 0] - csumv[st1, 0]
+                    iv3[idx2] += csumv[e1 + 1, 1] - csumv[st1, 1]
+                    iv4[idx2] += csumv[e1 + 1, 2] - csumv[st1, 2]
+                k += 1
+
+            if st1 <= e1:
+                kf = k + e1 - st1 + 1
+                idx[k:kf, s] = idx_r[st1 : e1 + 1]
+                k = kf
+            elif st2 <= e2:
+                kf = k + e2 - st2 + 1
+                idx[k:kf, s] = idx_r[st2 : e2 + 1]
+                k = kf
+
+        i = gap
+        r = 1 - r
+        s = 1 - s
+
+    covterm = np.sum(n * (x - np.mean(x)).T @ (y - np.mean(y)))
+    c1 = np.sum(iv1.T @ v[:, 2].copy())
+    c2 = np.sum(iv4)
+    c3 = np.sum(iv2.T @ y)
+    c4 = np.sum(iv3.T @ x)
+    d = 4 * ((c1 + c2) - (c3 + c4)) - 2 * covterm
+
+    y_sorted = y[idx[n::-1, r], :]
+    si = _cpu_cumsum(y_sorted)
+    by = np.zeros((n, 1))
+    by[idx[::-1, r]] = (np.arange(-(n - 2), n + 1, 2) * y_sorted.ravel()).reshape(
+        -1, 1
+    ) + (si[-1] - 2 * si)
+
+    if bias:
+        denom = [n ** 2, n ** 3, n ** 4]
+    else:
+        denom = [n * (n - 3), n * (n - 3) * (n - 2), n * (n - 3) * (n - 2) * (n - 1)]
+
+    stat = np.sum(
+        (d / denom[0])
+        + (np.sum(ax) * np.sum(by) / denom[2])
+        - (2 * (ax.T @ by) / denom[1])
+    )
+
+    return stat
+
+def _center_distmat(distx, bias):  # pragma: no cover #BS will move to _center_distance_matrix in _stats.pyx
+    """Centers the distance matrices"""
+    n = distx.shape[0]
+    if bias:
+        # use sum instead of mean because of numba restrictions
+        exp_distx = (
+            np.repeat(distx.sum(axis=0) / n, n).reshape(-1, n).T
+            + np.repeat(distx.sum(axis=1) / n, n).reshape(-1, n)
+            - (distx.sum() / (n * n))
+        )
+    else:
+        exp_distx = (
+            np.repeat((distx.sum(axis=0) / (n - 2)), n).reshape(-1, n).T
+            + np.repeat((distx.sum(axis=1) / (n - 2)), n).reshape(-1, n)
+            - distx.sum() / ((n - 1) * (n - 2))
+        )
+    cent_distx = distx - exp_distx
+    if not bias:
+        np.fill_diagonal(cent_distx, 0)
+    return cent_distx
+
+
+@jit(nopython=True, cache=True)
+def _dcov(distx, disty, bias=False, only_dcov=True):  # pragma: no cover
+    """Calculate the Dcov test statistic"""
+    if only_dcov:
+        # center distance matrices
+        distx = _center_distmat(distx, bias)
+        disty = _center_distmat(disty, bias)
+
+    stat = np.sum(distx * disty)
+
+    if only_dcov:
+        N = distx.shape[0]
+        if bias:
+            stat = 1 / (N ** 2) * stat
+        else:
+            stat = 1 / (N * (N - 3)) * stat
+
+    return stat
 
 def _mgc_stat(distx, disty):
     r"""
