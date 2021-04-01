@@ -5838,8 +5838,8 @@ def _dcov(distx, disty, bias=False, only_dcov=True):  # pragma: no cover
     """Calculate the Dcov test statistic"""
     if only_dcov:
         # center distance matrices
-        distx = _center_distmat(distx, bias)
-        disty = _center_distmat(disty, bias)
+        distx = _center_distance_matrix(distx)#, bias) #BS CHANGED
+        disty = _center_distance_matrix(disty)#, bias) #BS CHANGED
 
     stat = np.sum(distx * disty)
 
