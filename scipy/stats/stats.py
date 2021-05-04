@@ -190,6 +190,7 @@ from ._stats_mstats_common import (_find_repeats, linregress, theilslopes,
                                    siegelslopes)
 from ._stats import (_kendall_dis, _toint64, _weightedrankedtau,
                      _local_correlations)
+from ._stats import (_dcorr)
 from ._rvs_sampling import rvs_ratio_uniforms
 from ._page_trend_test import page_trend_test
 from dataclasses import make_dataclass
@@ -5420,7 +5421,7 @@ def multiscale_graphcorr(x, y, compute_distance=_euclidean_dist, reps=1000,
 def distance_correlation(x, y, compute_distance=_euclidean_dist, reps=1000,
                          workers=1, is_twosamp=False, random_state=None):
     """
-    Todo
+    Todo: THE DESCIPTION NEEDS TO BE UPDATED BASED ON DCORR (RATHER THAN MGC, WHICH THIS IS ORIGINALLY FROM)
 
     Parameters
     ----------
@@ -5665,21 +5666,14 @@ def distance_correlation(x, y, compute_distance=_euclidean_dist, reps=1000,
         x = compute_distance(x)
         y = compute_distance(y)
 
-    # calculate MGC stat
-    stat, stat_dict = _dcorr(x, y) #BS HERE
-    stat_mgc_map = stat_dict["stat_mgc_map"]
-    opt_scale = stat_dict["opt_scale"]
+    # calculate Distance_Correlation stat
+    stat = _dcorr(x,y)
 
-    # calculate permutation MGC p-value
+    # calculate permutation p-value
     pvalue, null_dist = _perm_test(x, y, stat, reps=reps, workers=workers,
                                    random_state=random_state)
 
-    # save all stats (other than stat/p-value) in dictionary
-    mgc_dict = {"mgc_map": stat_mgc_map,
-                "opt_scale": opt_scale,
-                "null_dist": null_dist}
-
-    return MGCResult(stat, pvalue, mgc_dict)
+    return stat, pvalue
 
 
 

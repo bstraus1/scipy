@@ -32,6 +32,7 @@ from scipy.spatial.distance import cdist
 from numpy.lib import NumpyVersion
 from scipy.stats.stats import (_broadcast_concatenate,
                                AlexanderGovernConstantInputWarning)
+from scipy.stats.stats import distance_correlation
 
 """ Numbers in docstrings beginning with 'W' refer to the section numbers
     and headings found in the STATISTICS QUIZ of Leland Wilkinson.  These are
@@ -6575,6 +6576,15 @@ class TestMGCStat:
                                                                random_state=1)
         assert_approx_equal(stat_dist, 0.163, significant=1)
         assert_approx_equal(pvalue_dist, 0.001, significant=1)
+
+class TestDcorr:
+    def testDcorr(self):
+        x = np.arange(20)
+        y = np.arange(20)
+        stat_dist, pvalue_dist = distance_correlation(x,y)
+        assert_approx_equal(stat_dist, 1, significant=1)
+        assert_approx_equal(pvalue_dist, 0.001, significant=1)
+    
 
 
 class TestPageTrendTest:
