@@ -336,15 +336,18 @@ def _center_distance_matrix(distx, global_corr='mgc', is_ranked=True):
     if global_corr == "rank":
         distx = rank_distx.astype(np.float64, copy=False)
 
+    # 'mgc' distance transform (col-wise mean) - default
+    cdef ndarray exp_distx = np.repeat(((distx.mean(axis=0) * n) / (n-1)), n).reshape(-1, n).T
+
     if global_corr == "unbiased": #BS CHANGED
         exp_distx = (
             np.repeat((distx.sum(axis=0) / (n - 2)), n).reshape(-1, n).T
             + np.repeat((distx.sum(axis=1) / (n - 2)), n).reshape(-1, n)
             - distx.sum() / ((n - 1) * (n - 2))
         )
-    else:
-        # 'mgc' distance transform (col-wise mean) - default
-        cdef ndarray exp_distx = np.repeat(((distx.mean(axis=0) * n) / (n-1)), n).reshape(-1, n).T
+    
+        
+        
 
     # center the distance matrix
     cdef ndarray cent_distx = distx - exp_distx
@@ -355,6 +358,188 @@ def _center_distance_matrix(distx, global_corr='mgc', is_ranked=True):
     return cent_distx, rank_distx
 
 
+def _center_distmat(distx, bias):  # pragma: no cover #BS will move to _center_distance_matrix in _stats.pyx
+    """Centers the distance matrices"""
+    n = distx.shape[0]
+    if bias:
+        # use sum instead of mean because of numba restrictions
+        exp_distx = (
+            np.repeat(distx.sum(axis=0) / n, n).reshape(-1, n).T
+            + np.repeat(distx.sum(axis=1) / n, n).reshape(-1, n)
+            - (distx.sum() / (n * n))
+        )
+    else:
+        exp_distx = (
+            np.repeat((distx.sum(axis=0) / (n - 2)), n).reshape(-1, n).T
+            + np.repeat((distx.sum(axis=1) / (n - 2)), n).reshape(-1, n)
+            - distx.sum() / ((n - 1) * (n - 2))
+        )
+    cent_distx = distx - exp_distx
+    if not bias:
+        np.fill_diagonal(cent_distx, 0)
+    return cent_distx
+
+@cython.wraparound(False)
+@cython.boundscheck(False)
+def _dcorr(distx, disty, bias=False, is_fast=False):  # pragma: no cover
+    """
+    Calculate the Dcorr test statistic.
+    """
+    if is_fast:
+        # calculate covariances and variances
+        covar = _fast_1d_dcov(distx, disty, bias=bias)
+        varx = _fast_1d_dcov(distx, distx, bias=bias)
+        vary = _fast_1d_dcov(disty, disty, bias=bias)
+    else:
+        # center distance matrices
+        distx = _center_distmat(distx, bias)
+        disty = _center_distmat(disty, bias)
+
+        # calculate covariances and variances
+        covar = _dcov(distx, disty, bias=bias, only_dcov=False)
+        varx = _dcov(distx, distx, bias=bias, only_dcov=False)
+        vary = _dcov(disty, disty, bias=bias, only_dcov=False)
+
+    # stat is 0 with negative variances (would make denominator undefined)
+    if varx <= 0 or vary <= 0:
+        stat = 0
+
+    # calculate generalized test statistic
+    else:
+        stat = covar / np.real(np.sqrt(varx * vary))
+
+    return stat
+
+
+@cython.wraparound(False)
+@cython.boundscheck(False)
+def _cpu_cumsum(data):  # pragma: no cover
+    """Create cumulative sum since numba doesn't sum over axes."""
+    cumsum = data.copy()
+    for i in range(1, data.shape[0]):
+        cumsum[i, :] = data[i, :] + cumsum[i - 1, :]
+    return cumsum
+
+
+
+@cython.wraparound(False)
+@cython.boundscheck(False)
+def _fast_1d_dcov(x, y, bias=False):  # pragma: no cover
+    """
+    Calculate the Dcorr test statistic. Note that though Dcov is calculated
+    and stored in covar, but not called due to a slower implementation.
+    """
+    n = x.shape[0]
+
+    # sort inputs
+    x_orig = x.ravel()
+    x = np.sort(x_orig)
+    y = y[np.argsort(x_orig)]
+    x = x.reshape(-1, 1)  # for numba
+
+    # cumulative sum
+    si = _cpu_cumsum(x)
+    ax = (np.arange(-(n - 2), n + 1, 2) * x.ravel()).reshape(-1, 1) + (si[-1] - 2 * si)
+
+    v = np.hstack((x, y, x * y))
+    nw = v.shape[1]
+
+    idx = np.vstack((np.arange(n), np.zeros(n))).astype(np.int64).T
+    iv1 = np.zeros((n, 1))
+    iv2 = np.zeros((n, 1))
+    iv3 = np.zeros((n, 1))
+    iv4 = np.zeros((n, 1))
+
+    i = 1
+    r = 0
+    s = 1
+    while i < n:
+        gap = 2 * i
+        k = 0
+        idx_r = idx[:, r]
+        csumv = np.vstack((np.zeros((1, nw)), _cpu_cumsum(v[idx_r, :])))
+
+        for j in range(1, n + 1, gap):
+            st1 = j - 1
+            e1 = min(st1 + i - 1, n - 1)
+            st2 = j + i - 1
+            e2 = min(st2 + i - 1, n - 1)
+
+            while (st1 <= e1) and (st2 <= e2):
+                idx1 = idx_r[st1]
+                idx2 = idx_r[st2]
+
+                if y[idx1] >= y[idx2]:
+                    idx[k, s] = idx1
+                    st1 += 1
+                else:
+                    idx[k, s] = idx2
+                    st2 += 1
+                    iv1[idx2] += e1 - st1 + 1
+                    iv2[idx2] += csumv[e1 + 1, 0] - csumv[st1, 0]
+                    iv3[idx2] += csumv[e1 + 1, 1] - csumv[st1, 1]
+                    iv4[idx2] += csumv[e1 + 1, 2] - csumv[st1, 2]
+                k += 1
+
+            if st1 <= e1:
+                kf = k + e1 - st1 + 1
+                idx[k:kf, s] = idx_r[st1 : e1 + 1]
+                k = kf
+            elif st2 <= e2:
+                kf = k + e2 - st2 + 1
+                idx[k:kf, s] = idx_r[st2 : e2 + 1]
+                k = kf
+
+        i = gap
+        r = 1 - r
+        s = 1 - s
+
+    covterm = np.sum(n * (x - np.mean(x)).T @ (y - np.mean(y)))
+    c1 = np.sum(iv1.T @ v[:, 2].copy())
+    c2 = np.sum(iv4)
+    c3 = np.sum(iv2.T @ y)
+    c4 = np.sum(iv3.T @ x)
+    d = 4 * ((c1 + c2) - (c3 + c4)) - 2 * covterm
+
+    y_sorted = y[idx[n::-1, r], :]
+    si = _cpu_cumsum(y_sorted)
+    by = np.zeros((n, 1))
+    by[idx[::-1, r]] = (np.arange(-(n - 2), n + 1, 2) * y_sorted.ravel()).reshape(
+        -1, 1
+    ) + (si[-1] - 2 * si)
+
+    if bias:
+        denom = [n ** 2, n ** 3, n ** 4]
+    else:
+        denom = [n * (n - 3), n * (n - 3) * (n - 2), n * (n - 3) * (n - 2) * (n - 1)]
+
+    stat = np.sum(
+        (d / denom[0])
+        + (np.sum(ax) * np.sum(by) / denom[2])
+        - (2 * (ax.T @ by) / denom[1])
+    )
+
+    return stat
+
+@cython.wraparound(False)
+@cython.boundscheck(False)
+def _dcov(distx, disty, bias=False, only_dcov=True):  # pragma: no cover
+    """Calculate the Dcov test statistic"""
+    if only_dcov:
+        # center distance matrices
+        distx = _center_distance_matrix(distx)#, bias) #BS CHANGED
+        disty = _center_distance_matrix(disty)#, bias) #BS CHANGED
+
+    stat = np.sum(distx * disty)
+
+    if only_dcov:
+        N = distx.shape[0]
+        if bias:
+            stat = 1 / (N ** 2) * stat
+        else:
+            stat = 1 / (N * (N - 3)) * stat
+
+    return stat
 
 # Centers each distance matrix and rank matrix
 @cython.wraparound(False)

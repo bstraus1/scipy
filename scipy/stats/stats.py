@@ -5419,7 +5419,7 @@ def multiscale_graphcorr(x, y, compute_distance=_euclidean_dist, reps=1000,
 
 def distance_correlation(x, y, compute_distance=_euclidean_dist, reps=1000,
                          workers=1, is_twosamp=False, random_state=None):
-    r"""
+    """
     Todo
 
     Parameters
