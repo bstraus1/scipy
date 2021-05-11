@@ -358,7 +358,7 @@ def _center_distance_matrix(distx, global_corr='mgc', is_ranked=True):
     return cent_distx, rank_distx
 
 
-def _center_distmat(distx, bias):  # pragma: no cover #BS will move to _center_distance_matrix in _stats.pyx
+def _center_distmat(distx, bias):  # pragma: no cover #BS Needs to be consolidated with _center_disttance_natrix
     """Centers the distance matrices"""
     n = distx.shape[0]
     if bias:
@@ -523,14 +523,14 @@ def _fast_1d_dcov(x, y, bias=False):  # pragma: no cover
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def _dcov(distx, disty, bias=False, only_dcov=True):  # pragma: no cover
+cdef _dcov(float64_t[:, :] distx, float64_t[:, :] disty, bool bias=False, bool only_dcov=True):  # pragma: no cover
     """Calculate the Dcov test statistic"""
     if only_dcov:
         # center distance matrices
         distx = _center_distance_matrix(distx)#, bias) #BS CHANGED
         disty = _center_distance_matrix(disty)#, bias) #BS CHANGED
 
-    stat = np.sum(distx * disty)
+    stat = np.sum(np.asarray(distx) * np.asarray(disty))
 
     if only_dcov:
         N = distx.shape[0]
