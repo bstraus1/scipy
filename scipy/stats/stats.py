@@ -5069,17 +5069,14 @@ class _ParallelP:
         order = self.random_states[index].permutation(self.y.shape[0])
         permy = self.y[order][:, order]
 
-
         # calculate permuted stats, store in null distribution
         perm_stat = _mgc_stat(self.x, permy)[0]
-
-
 
         return perm_stat
 
 class _ParallelP_dcorr:
     """
-    Helper function to calculate parallel p-value.
+    Helper function to calculate parallel p-value (for distance correlation).
     """
     def __init__(self, x, y, random_states):
         self.x = x
@@ -5090,10 +5087,8 @@ class _ParallelP_dcorr:
         order = self.random_states[index].permutation(self.y.shape[0])
         permy = self.y[order][:, order]
 
-
         # calculate permuted stats, store in null distribution
         perm_stat = _dcorr(self.x, permy)
-
 
         return perm_stat
 
@@ -5139,8 +5134,10 @@ def _perm_test(x, y, stat, reps=1000, workers=-1, random_state=None, func="mgc")
 
     # parallelizes with specified workers over number of reps and set seeds
     if func == "mgc":
+      # for multiscale-graphcorr
       parallelp = _ParallelP(x=x, y=y, random_states=random_states)
     else:
+      # for distance correlation
       parallelp = _ParallelP_dcorr(x=x, y=y, random_states=random_states)
 
     with MapWrapper(workers) as mapwrapper:
