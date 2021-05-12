@@ -5069,13 +5069,35 @@ class _ParallelP:
         order = self.random_states[index].permutation(self.y.shape[0])
         permy = self.y[order][:, order]
 
+
         # calculate permuted stats, store in null distribution
         perm_stat = _mgc_stat(self.x, permy)[0]
 
+
+
         return perm_stat
 
+class _ParallelP_dcorr:
+    """
+    Helper function to calculate parallel p-value.
+    """
+    def __init__(self, x, y, random_states):
+        self.x = x
+        self.y = y
+        self.random_states = random_states
 
-def _perm_test(x, y, stat, reps=1000, workers=-1, random_state=None):
+    def __call__(self, index):
+        order = self.random_states[index].permutation(self.y.shape[0])
+        permy = self.y[order][:, order]
+
+
+        # calculate permuted stats, store in null distribution
+        perm_stat = _dcorr(self.x, permy)
+
+
+        return perm_stat
+
+def _perm_test(x, y, stat, reps=1000, workers=-1, random_state=None, func="mgc"):
     r"""
     Helper function that calculates the p-value. See below for uses.
 
@@ -5114,8 +5136,13 @@ def _perm_test(x, y, stat, reps=1000, workers=-1, random_state=None):
     random_states = [np.random.RandomState(rng_integers(random_state, 1 << 32,
                      size=4, dtype=np.uint32)) for _ in range(reps)]
 
+
     # parallelizes with specified workers over number of reps and set seeds
-    parallelp = _ParallelP(x=x, y=y, random_states=random_states)
+    if func == "mgc":
+      parallelp = _ParallelP(x=x, y=y, random_states=random_states)
+    else:
+      parallelp = _ParallelP_dcorr(x=x, y=y, random_states=random_states)
+
     with MapWrapper(workers) as mapwrapper:
         null_dist = np.array(list(mapwrapper(parallelp, range(reps))))
 
@@ -5671,7 +5698,7 @@ def distance_correlation(x, y, compute_distance=_euclidean_dist, reps=1000,
 
     # calculate permutation p-value
     pvalue, null_dist = _perm_test(x, y, stat, reps=reps, workers=workers,
-                                   random_state=random_state)
+                                   random_state=random_state, func="dcorr")
 
     return stat, pvalue
 
