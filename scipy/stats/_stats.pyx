@@ -338,30 +338,14 @@ def _center_distance_matrix(distx, global_corr='mgc', is_ranked=True):
 
     # 'mgc' distance transform (col-wise mean) - default
     cdef ndarray exp_distx = np.repeat(((distx.mean(axis=0) * n) / (n-1)), n).reshape(-1, n).T
-
-    if global_corr == "unbiased": #BS CHANGED
-        exp_distx = (
-            np.repeat((distx.sum(axis=0) / (n - 2)), n).reshape(-1, n).T
-            + np.repeat((distx.sum(axis=1) / (n - 2)), n).reshape(-1, n)
-            - distx.sum() / ((n - 1) * (n - 2))
-        )
     
-        
-        
-
     # center the distance matrix
     cdef ndarray cent_distx = distx - exp_distx
 
     if global_corr != "mantel" and global_corr != "biased":
         np.fill_diagonal(cent_distx, 0)
 
-    return cent_distx, rank_distx
-
-
-def _center_distmat(distx, bias):  # pragma: no cover #BS Needs to be consolidated with _center_disttance_natrix
-    """Centers the distance matrices"""
-    n = distx.shape[0]
-    if bias:
+    if global_corr == "biased":
         # use sum instead of mean because of numba restrictions
         exp_distx = (
             np.repeat(distx.sum(axis=0) / n, n).reshape(-1, n).T
@@ -375,9 +359,10 @@ def _center_distmat(distx, bias):  # pragma: no cover #BS Needs to be consolidat
             - distx.sum() / ((n - 1) * (n - 2))
         )
     cent_distx = distx - exp_distx
-    if not bias:
+    if global_corr!="unbiased":
         np.fill_diagonal(cent_distx, 0)
-    return cent_distx
+
+    return cent_distx, rank_distx
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
@@ -385,6 +370,13 @@ def _dcorr(distx, disty, bias=False, is_fast=False):  # pragma: no cover
     """
     Calculate the Dcorr test statistic.
     """
+ 
+    val = ""
+    if bias:
+        val = "biased"
+    else:
+        val = "unbiased"
+
     if is_fast:
         # calculate covariances and variances
         covar = _fast_1d_dcov(distx, disty, bias=bias)
@@ -392,8 +384,10 @@ def _dcorr(distx, disty, bias=False, is_fast=False):  # pragma: no cover
         vary = _fast_1d_dcov(disty, disty, bias=bias)
     else:
         # center distance matrices
-        distx = _center_distmat(distx, bias)
-        disty = _center_distmat(disty, bias)
+        
+
+        distx = _center_distance_matrix(distx, global_corr=val)[0]
+        disty = _center_distance_matrix(disty, global_corr=val)[0]
 
         # calculate covariances and variances
         covar = _dcov(distx, disty, bias=bias, only_dcov=False)
